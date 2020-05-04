@@ -76,6 +76,45 @@ str_to_size (const char *s)
   return size;
 }
 
+static uint_fast32_t
+crc32 (const void *const buf, size_t size)
+{
+  static uint_least32_t table[256];
+
+  if (!table[1])
+    {
+      const uint_fast32_t poly = UINT32_C(0xEDB88320);
+
+      for (unsigned int i = 0; i < 256; i++)
+	{
+	  uint_fast32_t crc = i;
+
+	  for (unsigned int j = 0; j < 8; j++)
+	    crc = (crc >> 1) ^ ((crc & 1) ? poly : 0);
+	  table[i] = crc;
+	}
+    }
+
+  uint_fast32_t crc = UINT32_C(0xFFFFFFFF);
+  for (size_t i = 0; i < size; i++)
+    crc = (crc >> 8) ^ table[(crc & 0xFF) ^ ((const uint8_t *) buf)[i]];
+  return ~crc & UINT32_C(0xFFFFFFFF);
+}
+
+static uint_fast16_t
+read_aligned_le16 (const void *const vp)
+{
+  const uint8_t *const p = __builtin_assume_aligned(vp, 2);
+  return (uint_fast16_t) p[0] | (p[1] << 8);
+}
+
+static uint_fast32_t
+read_aligned_le32 (const void *const vp)
+{
+  const uint8_t *const p = __builtin_assume_aligned(vp, 4);
+  return (uint_fast32_t) p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -171,11 +210,76 @@ main (int argc, char *argv[])
   if (outbuf == MAP_FAILED)
     err(1, "anonymous mmap");
 
+  char *inbuf = buf;
   size_t insize = inbufsize;
+
+#define XZ_MAGIC1	(0xFD | ('7' << 8) | ('z' << 16) | ('X' << 24))
+#define XZ_MAGIC2	('Z' | (0x00 << 8))
+#define XZ_MAGIC3	('Y' | ('Z' << 8))
+
+  if (insize > (12 + 8) &&
+      read_aligned_le32(inbuf) == XZ_MAGIC1 &&
+      (read_aligned_le32(&inbuf[4]) & 0xF0FFFFFFU) == XZ_MAGIC2 &&
+      crc32(&inbuf[6], 2) == read_aligned_le32(&inbuf[8]))
+    {
+      /* Found XZ Stream Header. */
+
+      unsigned int const block_header_size = *(uint8_t *) &buf[12];
+
+      if (block_header_size != 0 &&
+	  (insize - 12 - 4) > (block_header_size * 4) &&
+	  crc32(&inbuf[12], block_header_size * 4) == read_aligned_le32(&inbuf[12 + block_header_size * 4]))
+	{
+	  /* Found XZ Block Header. */
+	  if ((*(uint8_t *) &inbuf[13] & 0x03) != 0x00)
+	    errx(1, "%s: unsupported .xz file (%u filters)",
+		 filename, (*(uint8_t *) &inbuf[13] & 0x03) + 1);
+
+	  inbuf += 12 + block_header_size * 4 + 4;
+	  insize -= 12 + block_header_size * 4 + 4;
+	  if (verbosity > 0)
+	    dbg_printf("Skipping .xz header, %u bytes",
+		       12 + block_header_size * 4 + 4);
+
+	  unsigned int const checktype = *(uint8_t *) &buf[7] & 0xF;
+	  unsigned int const checksize
+	    = checktype ? (4 << ((checktype - 1) / 3)) : 0;
+	  if (insize > (8 + 12 + checksize) && (insize & 3) == 0 &&
+	      read_aligned_le16(&inbuf[insize - 2]) == XZ_MAGIC3 &&
+	      /* Footer Stream Flags */
+	      (read_aligned_le16(&inbuf[insize - 4]) ==
+	       read_aligned_le16(&buf[6])) &&
+	      (crc32(&inbuf[insize - 8], 6) ==
+	       read_aligned_le32(&inbuf[insize - 12])))
+	    {
+	      /* Found Stream Footer. */
+	      uint_fast32_t const backward_size
+		= read_aligned_le32(&inbuf[insize - 8]);
+	      if (backward_size > 0 &&
+		  backward_size < (insize / 4 - 4) &&
+		  /* Index Indicator */
+		  !inbuf[insize - 16 - backward_size * 4] &&
+		  (crc32(&inbuf[insize - 16 - backward_size * 4],
+			 backward_size * 4) ==
+		   read_aligned_le32(&inbuf[insize - 16])))
+		{
+		  /* Found Index. */
+		  if (*(uint8_t *) &inbuf[insize - 16 - backward_size * 4 + 1] != 0x01)
+		    errx(1, "%s: unsupported .xz file (more than one blocks)",
+			 filename);
+		  size_t const stripsize = 16 + backward_size * 4 + checksize;
+		  insize -= stripsize;
+		  if (verbosity > 0)
+		    dbg_printf("Stripping .xz footer, %zu bytes", stripsize);
+		}
+	    }
+	}
+    }
+
   size_t outsize = outbufsize;
   size_t saved_insize = insize;
 
-  enum uncompress_status status = uncompress_lzma2(buf, &insize,
+  enum uncompress_status status = uncompress_lzma2(inbuf, &insize,
 						   outbuf, &outsize);
 
   if (verbosity > 0)
@@ -193,7 +297,7 @@ main (int argc, char *argv[])
 	}
 
       dbg_printf("uncompress_lzma2(%p, [%zu -> %zu], %p, [%zu -> %zu]) = %d (%s)",
-		 buf, saved_insize, insize, outbuf, outbufsize, outsize,
+		 inbuf, saved_insize, insize, outbuf, outbufsize, outsize,
 		 (int) status, s);
     }
 
