@@ -31,8 +31,13 @@
 #include <string.h>
 
 #ifdef DEBUG
-# include <err.h>
-# define DBG(...)	warnx(__VA_ARGS__)
+extern int verbosity;
+extern void dbg_printf (const char *, ...)
+# ifdef __GNUC__
+  __attribute__((format(printf, 1, 2)))
+# endif
+  ;
+# define DBG(...)	do { if (verbosity > 1) dbg_printf(__VA_ARGS__); } while (0)
 #else
 # define DBG(...)	((void) 0)
 #endif
