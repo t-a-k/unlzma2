@@ -23,6 +23,10 @@
 
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 enum uncompress_status
   {
     UNCOMPRESS_OK,
@@ -36,5 +40,9 @@ extern enum uncompress_status uncompress_lzma2 (const void */* inbuf */,
 						size_t */* insize_ptr */,
 						void */* outbuf */,
 						size_t */* outsize_ptr */);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
