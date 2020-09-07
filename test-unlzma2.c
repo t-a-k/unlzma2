@@ -126,19 +126,30 @@ main (int argc, char *argv[])
   size_t inbufsize;
   char *outbuf;
   size_t outbufsize = 0;
+  _Bool check_crc = 0;
+  enum { FMT_AUTO, FMT_RAW, FMT_XZ, FMT_XZ_CRC32 } format = FMT_AUTO;
 
-  while ((optc = getopt(argc, argv, "b:v")) >= 0)
+  while ((optc = getopt(argc, argv, "b:crvx")) >= 0)
     switch (optc)
       {
       case 'b':
 	outbufsize = str_to_size(optarg);
 	break;
+      case 'c':
+	check_crc = 1;
+	break;
+      case 'r':
+	format = FMT_RAW;
+	break;
       case 'v':
 	verbosity++;
 	break;
+      case 'x':
+	format = FMT_XZ;
+	break;
       default:
-	errx(2, "usage: %s [-v] [-b OUTPUT-BUFFER-SIZE] [FILE]", argv[0]);
-	__builtin_unreachable();
+	errx(2, "usage: %s [-v] [-r|-x] [-c] [-b OUTPUT-BUFFER-SIZE] [FILE]",
+	     argv[0]);
 	return 2;
       }
 
@@ -217,12 +228,23 @@ main (int argc, char *argv[])
 #define XZ_MAGIC2	('Z' | (0x00 << 8))
 #define XZ_MAGIC3	('Y' | ('Z' << 8))
 
-  if (insize > (12 + 8) &&
+  if (format != FMT_RAW &&
+      insize > (12 + 8) &&
       read_aligned_le32(inbuf) == XZ_MAGIC1 &&
-      (read_aligned_le32(&inbuf[4]) & 0xF0FFFFFFU) == XZ_MAGIC2 &&
+      read_aligned_le16(&inbuf[4]) == XZ_MAGIC2 &&
       crc32(&inbuf[6], 2) == read_aligned_le32(&inbuf[8]))
     {
       /* Found XZ Stream Header. */
+
+      if (format == FMT_AUTO)
+	format = FMT_XZ;
+      unsigned int const stream_flags = read_aligned_le16(&inbuf[6]);
+      if (stream_flags & ~0x0F00)
+	errx(1, "%s: Unsupported .xz file (Stream Flags = %#x)",
+	     filename, stream_flags);
+      unsigned int const checktype = (stream_flags >> 8) & 0xF;
+      if (checktype == 0x1)
+	format = FMT_XZ_CRC32;
 
       unsigned int const block_header_size = *(uint8_t *) &buf[12];
 
@@ -241,7 +263,6 @@ main (int argc, char *argv[])
 	    dbg_printf("Skipping .xz header, %u bytes",
 		       12 + block_header_size * 4 + 4);
 
-	  unsigned int const checktype = *(uint8_t *) &buf[7] & 0xF;
 	  unsigned int const checksize
 	    = checktype ? (4 << ((checktype - 1) / 3)) : 0;
 	  if (insize > (8 + 12 + checksize) && (insize & 3) == 0 &&
@@ -275,6 +296,8 @@ main (int argc, char *argv[])
 	    }
 	}
     }
+  else if (format == FMT_XZ)
+    errx(1, "%s: Not a .xz file", filename);
 
   size_t outsize = outbufsize;
   size_t saved_insize = insize;
@@ -301,6 +324,11 @@ main (int argc, char *argv[])
 		 (int) status, s);
     }
 
+  /* Sanity check */
+  if (insize > saved_insize)
+    errx(3, "input buffer overrun (insize = %zu -> %zu)",
+	 saved_insize, insize);
+
   for (size_t offset = 0; offset < outsize; )
     {
       ssize_t nwritten
@@ -310,5 +338,24 @@ main (int argc, char *argv[])
       offset += nwritten;
     }
 
-  return status != UNCOMPRESS_OK;
+  if (status != UNCOMPRESS_OK)
+    return 1;
+
+  if (format == FMT_XZ_CRC32)
+    {
+      if (saved_insize - insize > 3)
+	errx(1, "invalid block padding (%zu bytes)", saved_insize - insize);
+
+      const uint_least32_t recorded_crc = read_aligned_le32(&inbuf[saved_insize]);
+      const uint_least32_t computed_crc	= crc32(outbuf, outsize);
+      if (recorded_crc != computed_crc)
+	errx(1, "CRC32 mismatch (recorded %.8" PRIxLEAST32 ", computed %.8" PRIxLEAST32 ")",
+	     recorded_crc, computed_crc);
+      else if (verbosity)
+	dbg_printf("CRC32 = %.8" PRIxLEAST32 ", OK", computed_crc);
+    }
+  else if (check_crc)
+    errx(1, "%s: No 32-bit CRC", filename);
+
+  return 0;
 }
