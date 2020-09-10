@@ -31,6 +31,7 @@
 #include <string.h>
 
 #ifdef DEBUG
+# include <inttypes.h>
 extern int verbosity;
 extern void dbg_printf (const char *, ...)
 # ifdef __GNUC__
@@ -216,7 +217,7 @@ rc_bit (struct frame *const frame, probability_t *const prob)
       *prob = p - (p >> RC_MOVE_BITS);
       bit = 1;
     }
-  DBG("rc_bit: bound=%#x, range=%#x, code=%#x, *prob=%#x -> %d",
+  DBG("rc_bit: bound=%#" PRIxFAST32 ", range=%#x, code=%#x, *prob=%#x -> %d",
       bound, frame->rc_range, frame->rc_code, *prob, bit);
   return bit;
 }
@@ -434,7 +435,7 @@ uncompress_lzma2 (const void *const inbuf, size_t *const insizep,
 			}
 		      while (symbol < 0x100);
 		    }
-		  DBG("lzma_literal: symbol=%#x @%u", symbol, frame.outcount);
+		  DBG("lzma_literal: symbol=%#x @%zu", symbol, frame.outcount);
 		  outbuf[frame.outcount++] = symbol;
 		  /* lzma_state_literal */
 		  if (frame.state <= STATE_SHORTREP_LIT_LIT)
@@ -544,7 +545,7 @@ uncompress_lzma2 (const void *const inbuf, size_t *const insizep,
 			  if (dist_slot < DIST_MODEL_END)
 			    {
 			      frame.rep[0] <<= limit;
-			      probs = &frame.probs.dist_special[frame.rep[0] - dist_slot - 1];
+			      probs = &frame.probs.dist_special[frame.rep[0] - dist_slot] - 1;
 			    }
 			  else
 			    {
@@ -590,7 +591,7 @@ uncompress_lzma2 (const void *const inbuf, size_t *const insizep,
 		    }
 
 		  /* dict_repeat */
-		  DBG("dict_repeat: len=%u, dist=%u @%u",
+		  DBG("dict_repeat: len=%u, dist=%u @%zu",
 		      len, frame.rep[0], frame.outcount);
 		  if (UNLIKELY(frame.outcount - dict_origin <= frame.rep[0]))
 		    RETURN(UNCOMPRESS_DATA_ERROR);
