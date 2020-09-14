@@ -105,14 +105,17 @@ static uint_fast16_t
 read_aligned_le16 (const void *const vp)
 {
   const uint8_t *const p = __builtin_assume_aligned(vp, 2);
-  return (uint_fast16_t) p[0] | (p[1] << 8);
+  return (uint_fast16_t) p[0] | (uint_fast16_t) p[1] << 8;
 }
 
 static uint_fast32_t
 read_aligned_le32 (const void *const vp)
 {
   const uint8_t *const p = __builtin_assume_aligned(vp, 4);
-  return (uint_fast32_t) p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24);
+  return ((uint_fast32_t) p[0]       |
+	  (uint_fast32_t) p[1] <<  8 |
+	  (uint_fast32_t) p[2] << 16 |
+	  (uint_fast32_t) p[3] << 24);
 }
 
 int

@@ -180,7 +180,10 @@ read_unaligned_be32 (const void *const vp)
 {
   const uint8_t *const p = vp;
 
-  return (p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3];
+  return ((uint_fast32_t) p[0] << 24 |
+	  (uint_fast32_t) p[1] << 16 |
+	  (uint_fast32_t) p[2] <<  8 |
+	  (uint_fast32_t) p[3]);
 }
 
 static inline _Bool
