@@ -152,12 +152,6 @@ struct frame
   };
 
 static void
-rc_reset (struct frame *const frame)
-{
-  frame->rc_range = UINT32_C(0xFFFFFFFF);
-}
-
-static void
 lzma_reset (struct frame *const frame)
 {
   frame->state = STATE_LIT_LIT;
@@ -171,8 +165,6 @@ lzma_reset (struct frame *const frame)
   do
     *probs++ = RC_BIT_MODEL_TOTAL  / 2;
   while (--i);
-
-  rc_reset(frame);
 }
 
 static inline uint_fast32_t
@@ -377,6 +369,7 @@ uncompress_lzma2 (const void *const inbuf, size_t *const insizep,
 	    RETURN(UNCOMPRESS_DATA_ERROR);
 	  if (UNLIKELY((frame.inlimit - frame.incount) < RC_INIT_BYTES))
 	    RETURN(UNCOMPRESS_INLIMIT);
+	  frame.rc_range = UINT32_C(0xFFFFFFFF);	/* rc_reset */
 	  frame.rc_code = read_unaligned_be32(&frame.inbuf[frame.incount + 1]);
 	  frame.incount += RC_INIT_BYTES;
 	  DBG("rc_read_init: code=%u", frame.rc_code);	  
@@ -549,6 +542,8 @@ uncompress_lzma2 (const void *const inbuf, size_t *const insizep,
 			    {
 			      frame.rep[0] <<= limit;
 			      probs = &frame.probs.dist_special[frame.rep[0] - dist_slot] - 1;
+			      DBG("lzma_match: rep0=%" PRIuLEAST32 ", dist_slot=%u, probs=dist_special%+td",
+				  frame.rep[0], dist_slot, probs - frame.probs.dist_special);
 			    }
 			  else
 			    {
